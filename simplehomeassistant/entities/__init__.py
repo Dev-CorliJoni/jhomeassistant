@@ -1,0 +1,1 @@
+from .homeassistant_entity_base import HomeAssistantEntityBase
