@@ -1,7 +1,27 @@
 from __future__ import annotations
 
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Any
+from simplehomeassistant.setup_logging import get_logger
+from simplehomeassistant.types.component import Component
+from simplehomeassistant.types.device_classes.base_device_class import BaseDeviceClass
+from simplehomeassistant.types.units import MonetaryUnit
+from simplehomeassistant.types.units.base import BaseUnit
+
+logger = get_logger("validation")
+
+
+def validate_non_empty_string(value: str | None, field: str, allow_none=False) -> str | None:
+    """
+    Validate that 'value' is a non-empty string.
+    """
+    if allow_none and value is None:
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"{field} is invalid: value must be a string.")
+    if value.strip() == "":
+        raise ValueError(f"{field} is invalid: value must not be empty.")
+    return value
 
 
 def validate_discovery_prefix(value: str) -> str:
@@ -17,10 +37,7 @@ def validate_discovery_prefix(value: str) -> str:
     - No empty topic segments (reject '//' or leading/trailing '/').
     - Whitespace inside is rejected to avoid fragile topics.
     """
-    if not isinstance(value, str):
-        raise ValueError("discovery_prefix is invalid: value must be a string.")
-    if value == "":
-        raise ValueError("discovery_prefix is invalid: value must not be empty.")
+    validate_non_empty_string(value, "discovery_prefix")
     if value != value.strip():
         raise ValueError("discovery_prefix is invalid: leading or trailing whitespace is not allowed.")
     if value.startswith("$"):
@@ -29,7 +46,7 @@ def validate_discovery_prefix(value: str) -> str:
         raise ValueError("discovery_prefix is invalid: wildcards '+' and '#' are not allowed.")
     if "\x00" in value:
         raise ValueError("discovery_prefix is invalid: null character is not allowed.")
-    if any(ch.isspace() for ch in value):
+    if any(char.isspace() for char in value):
         raise ValueError("discovery_prefix is invalid: whitespace characters are not allowed.")
     if value.startswith("/") or value.endswith("/"):
         raise ValueError("discovery_prefix is invalid: must not start or end with '/'.")
@@ -44,6 +61,7 @@ def validate_discovery_prefix(value: str) -> str:
     return value
 
 
+# Not necessary :
 def _validate_discovery_topic_id(value: str, id_name: str) -> str:
     """
     Validate a Node ID or Object ID for Home Assistant MQTT discovery.
@@ -56,70 +74,78 @@ def _validate_discovery_topic_id(value: str, id_name: str) -> str:
     Returns the input value if valid.
     Raises ValidationError with a clear reason if invalid.
     """
-    if not isinstance(value, str):
-        raise ValueError(f"{id_name} is invalid: value must be a string.")
-    if value == "":
-        raise ValueError(f"{id_name} is invalid: value must not be empty.")
+    validate_non_empty_string(value, id_name)
     if not re.fullmatch(r"^[A-Za-z0-9_-]+$", value):
         raise ValueError(f"{id_name} is invalid: only letters, digits, underscore, and hyphen are allowed.")
     return value
 
 
-def validate_object_id(value: str) -> str:
+"""def validate_object_id(value: str) -> str:
     return _validate_discovery_topic_id(value, "object_id")
 
 
 def validate_node_id(value: str | None) -> str | None:
-    return value if value is None else _validate_discovery_topic_id(value, "node_id")
+    return value if value is None else _validate_discovery_topic_id(value, "node_id")"""
 
 
-def validate_component(value: str) -> str:
+def validate_topic(topic: str, strict_mode: bool = False) -> str:
     """
-    Validate the component in an MQTT discovery topic (e.g., 'sensor', 'light').
+    Validate an MQTT topic name.
 
-    Rules:
-    - Non-empty lowercase with underscores only: ^[a-z_]+$
-    - If strict=True, must be in the provided allowlist (SUPPORTED_COMPONENTS by default).
-    - No slashes or uppercase characters.
+    Spec-enforced checks (always errors):
+      - Non-empty UTF-8 string.
+      - No null character ('\\x00').
+      - UTF-8 length <= 65535 bytes.
+      - No '+' or '#' (wildcards are for filters, not topic names).
+
+    Best-practice checks (warnings by default; errors if strict_mode=True):
+      - No leading/trailing whitespace.
+      - No internal whitespace.
+      - Do not start with '$' (reserved for broker/$SYS).
+      - Avoid leading/trailing '/'.
+      - Avoid empty levels ('//').
+
+    Returns the topic if valid, else raises ValueError.
     """
-    if not isinstance(value, str):
-        raise ValueError("component is invalid: value must be a string.")
-    if value == "":
-        raise ValueError("component is invalid: value must not be empty.")
-    if not re.fullmatch(r"^[a-z_]+$", value):
-        raise ValueError("component is invalid: only lowercase letters and underscores are allowed.")
 
-    # Local allowlist exists only during this call; no module-level storage.
-    supported = {
-        "alarm_control_panel",
-        "binary_sensor",
-        "button",
-        "camera",
-        "climate",
-        "cover",
-        "event",
-        "fan",
-        "humidifier",
-        "light",
-        "lock",
-        "media_player",
-        "number",
-        "remote",
-        "scene",
-        "select",
-        "sensor",
-        "siren",
-        "switch",
-        "text",
-        "update",
-        "vacuum",
-        "valve",
-        "water_heater",
-        "weather",
-    }
-    if value not in supported:
-        raise ValueError(f"component is invalid: '{value}' is not a supported MQTT discovery component.")
-    return value
+    # ---- Spec-enforced ----
+    validate_non_empty_string(topic, "topic")
+    if "\x00" in topic:
+        raise ValueError("topic is invalid: null character is not allowed.")
+
+    try:
+        encoded = topic.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("topic is invalid: must be UTF-8 encodable.")
+
+    if len(encoded) > 65535:
+        raise ValueError("topic is invalid: UTF-8 length must be ≤ 65535 bytes.")
+    if "+" in topic or "#" in topic:
+        raise ValueError("topic is invalid: wildcards '+' and '#' are not allowed in topic names.")
+
+    # ---- Best practices (warn or error) ----
+    bp_issues = []
+
+    if topic != topic.strip():
+        bp_issues.append("leading or trailing whitespace is not recommended.")
+    if any(c.isspace() for c in topic):
+        bp_issues.append("whitespace inside topic is not recommended.")
+    if topic.startswith("$"):
+        bp_issues.append("topics starting with '$' are reserved for broker/system.")
+    if topic.startswith("/") or topic.endswith("/"):
+        bp_issues.append("avoid leading or trailing '/'.")
+    if "//" in topic:
+        bp_issues.append("avoid empty topic levels ('//').")
+
+    if bp_issues:
+        msg = "validate_topic best-practice issues: " + "; ".join(bp_issues)
+        if strict_mode:
+            logger.error(msg)
+            raise ValueError("topic violates best practices: " + "; ".join(bp_issues))
+        else:
+            logger.warning(msg)
+
+    return topic
 
 
 def validate_icon(name: str) -> str:
@@ -135,268 +161,38 @@ def validate_icon(name: str) -> str:
     return name
 
 
-def get_allowed_configs():
-    return {
-        "sensor": {
-            None: None,
-            "absolute_humidity": ["g/m³", "mg/m³"],
-            "apparent_power": ["mVA", "VA", "kVA"],
-            "aqi": [None],
-            "area": ["m²", "cm²", "km²", "mm²", "in²", "ft²", "yd²", "mi²", "ac", "ha"],
-            "atmospheric_pressure": ["cbar", "bar", "hPa", "mmHg", "inHg", "inH₂O", "kPa", "mbar", "Pa", "psi"],
-            "battery": ["%"],
-            "blood_glucose_concentration": ["mg/dL", "mmol/L"],
-            "carbon_dioxide": ["ppm"],
-            "carbon_monoxide": ["ppm", "µg/m³", "mg/m³"],
-            "conductivity": ["S/cm", "mS/cm", "µS/cm"],
-            "current": ["A", "mA"],
-            "data_rate": ["bit/s", "kbit/s", "Mbit/s", "Gbit/s", "B/s", "kB/s", "MB/s", "GB/s", "KiB/s", "MiB/s",
-                          "GiB/s"],
-            "data_size": [
-                "bit", "kbit", "Mbit", "Gbit",
-                "B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB",
-                "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB",
-            ],
-            "date": [None],
-            "distance": ["km", "m", "cm", "mm", "mi", "nmi", "yd", "in"],
-            "duration": ["d", "h", "min", "s", "ms", "µs"],
-            "energy": ["J", "kJ", "MJ", "GJ", "mWh", "Wh", "kWh", "MWh", "GWh", "TWh", "cal", "kcal", "Mcal", "Gcal"],
-            "energy_distance": ["kWh/100km", "Wh/km", "mi/kWh", "km/kWh"],
-            "energy_storage": ["J", "kJ", "MJ", "GJ", "mWh", "Wh", "kWh", "MWh", "GWh", "TWh", "cal", "kcal", "Mcal",
-                               "Gcal"],
-            "enum": [None],
-            "frequency": ["Hz", "kHz", "MHz", "GHz"],
-            "gas": ["L", "m³", "ft³", "CCF", "MCF"],
-            "humidity": ["%"],
-            "illuminance": ["lx"],
-            "irradiance": ["W/m²", "BTU/(h⋅ft²)"],
-            "moisture": ["%"],
-            "monetary": ["<ISO 4217 currency code>"],
-            "nitrogen_dioxide": ["µg/m³"],
-            "nitrogen_monoxide": ["µg/m³"],
-            "nitrous_oxide": ["µg/m³"],
-            "ozone": ["µg/m³"],
-            "ph": [None],
-            "pm1": ["µg/m³"],
-            "pm25": ["µg/m³"],
-            "pm4": ["µg/m³"],
-            "pm10": ["µg/m³"],
-            "power": ["mW", "W", "kW", "MW", "GW", "TW"],
-            "power_factor": ["%", None],
-            "precipitation": ["cm", "in", "mm"],
-            "precipitation_intensity": ["in/d", "in/h", "mm/d", "mm/h"],
-            "pressure": ["cbar", "bar", "hPa", "mmHg", "inHg", "kPa", "mbar", "Pa", "psi", "mPa"],
-            "reactive_energy": ["varh", "kvarh"],
-            "reactive_power": ["mvar", "var", "kvar"],
-            "signal_strength": ["dB", "dBm"],
-            "sound_pressure": ["dB", "dBA"],
-            "speed": ["ft/s", "in/d", "in/h", "in/s", "km/h", "kn", "m/s", "mph", "mm/d", "mm/s"],
-            "sulphur_dioxide": ["µg/m³"],
-            "temperature": ["°C", "°F", "K"],
-            "temperature_delta": ["°C", "°F", "K"],
-            "timestamp": [None],
-            "volatile_organic_compounds": ["µg/m³", "mg/m³"],
-            "volatile_organic_compounds_parts": ["ppm", "ppb"],
-            "voltage": ["V", "mV", "µV", "kV", "MV"],
-            "volume": ["L", "mL", "gal", "fl. oz.", "m³", "ft³", "CCF", "MCF"],
-            "volume_flow_rate": ["m³/h", "m³/min", "m³/s", "ft³/min", "L/h", "L/min", "L/s", "gal/h", "gal/min",
-                                 "mL/s"],
-            "volume_storage": ["L", "mL", "gal", "fl. oz.", "m³", "ft³", "CCF", "MCF"],
-            "water": ["L", "gal", "m³", "ft³", "CCF", "MCF"],
-            "weight": ["kg", "g", "mg", "µg", "oz", "lb", "st"],
-            "wind_direction": ["°"],
-            "wind_speed": ["ft/s", "km/h", "kn", "m/s", "mph"],
-        },
-
-        # NUMBER — mapped from HA doc (differs slightly from sensor, e.g. Beaufort, inH₂O)
-        "number": {
-            None: [None],
-            "absolute_humidity": ["g/m³", "mg/m³"],
-            "apparent_power": ["mVA", "VA", "kVA"],
-            "aqi": [None],
-            "area": ["m²", "cm²", "km²", "mm²", "in²", "ft²", "yd²", "mi²", "ac", "ha"],
-            "atmospheric_pressure": ["cbar", "bar", "hPa", "mmHg", "inHg", "inH₂O", "kPa", "mbar", "Pa", "psi"],
-            "battery": ["%"],
-            "blood_glucose_concentration": ["mg/dL", "mmol/L"],
-            "carbon_dioxide": ["ppm"],
-            "carbon_monoxide": ["ppm"],
-            "current": ["A", "mA"],
-            "data_rate": ["bit/s", "kbit/s", "Mbit/s", "Gbit/s", "B/s", "kB/s", "MB/s", "GB/s", "KiB/s", "MiB/s",
-                          "GiB/s"],
-            "data_size": [
-                "bit", "kbit", "Mbit", "Gbit",
-                "B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB",
-                "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB",
-            ],
-            "distance": ["km", "m", "cm", "mm", "mi", "nmi", "yd", "in"],
-            "duration": ["d", "h", "min", "s", "ms", "µs"],
-            "energy": ["J", "kJ", "MJ", "GJ", "mWh", "Wh", "kWh", "MWh", "GWh", "TWh", "cal", "kcal", "Mcal", "Gcal"],
-            "energy_distance": ["kWh/100km", "Wh/km", "mi/kWh", "km/kWh"],
-            "energy_storage": ["J", "kJ", "MJ", "GJ", "mWh", "Wh", "kWh", "MWh", "GWh", "TWh", "cal", "kcal", "Mcal",
-                               "Gcal"],
-            "frequency": ["Hz", "kHz", "MHz", "GHz"],
-            "gas": ["L", "m³", "ft³", "CCF", "MCF"],
-            "humidity": ["%"],
-            "illuminance": ["lx"],
-            "irradiance": ["W/m²", "BTU/(h⋅ft²)"],
-            "moisture": ["%"],
-            "monetary": ["<ISO 4217 currency code>"],
-            "nitrogen_dioxide": ["µg/m³"],
-            "nitrogen_monoxide": ["µg/m³"],
-            "nitrous_oxide": ["µg/m³"],
-            "ozone": ["µg/m³"],
-            "ph": [None],
-            "pm1": ["µg/m³"],
-            "pm25": ["µg/m³"],
-            "pm4": ["µg/m³"],
-            "pm10": ["µg/m³"],
-            "power_factor": ["%", None],
-            "power": ["mW", "W", "kW", "MW", "GW", "TW"],
-            "precipitation": ["cm", "in", "mm"],
-            "precipitation_intensity": ["in/d", "in/h", "mm/d", "mm/h"],
-            "pressure": ["Pa", "kPa", "hPa", "bar", "cbar", "mbar", "mmHg", "inHg", "inH₂O", "psi"],
-            "reactive_energy": ["varh", "kvarh"],
-            "reactive_power": ["mvar", "var", "kvar"],
-            "signal_strength": ["dB", "dBm"],
-            "sound_pressure": ["dB", "dBA"],
-            "speed": ["ft/s", "in/d", "in/h", "in/s", "km/h", "kn", "m/s", "mph", "mm/d", "mm/s"],
-            "sulphur_dioxide": ["µg/m³"],
-            "temperature": ["°C", "°F", "K"],
-            "volatile_organic_compounds": ["µg/m³", "mg/m³"],
-            "volatile_organic_compounds_parts": ["ppm", "ppb"],
-            "voltage": ["V", "mV", "µV", "kV", "MV"],
-            "volume": ["L", "mL", "gal", "fl. oz.", "m³", "ft³", "CCF", "MCF"],
-            "volume_flow_rate": ["m³/h", "m³/min", "m³/s", "ft³/min", "L/h", "L/min", "L/s", "gal/min", "mL/s"],
-            "volume_storage": ["L", "mL", "gal", "fl. oz.", "m³", "ft³", "CCF", "MCF"],
-            "water": ["L", "gal", "m³", "ft³", "CCF", "MCF"],
-            "weight": ["kg", "g", "mg", "µg", "oz", "lb", "st"],
-            "wind_direction": ["°"],
-            "wind_speed": ["Beaufort", "ft/s", "km/h", "kn", "m/s", "mph"],
-        },
-
-        # BINARY SENSOR — units never apply
-        "binary_sensor": {
-            None: [None],
-            "battery": [None],
-            "battery_charging": [None],
-            "carbon_monoxide": [None],
-            "cold": [None],
-            "connectivity": [None],
-            "door": [None],
-            "garage_door": [None],
-            "gas": [None],
-            "heat": [None],
-            "light": [None],
-            "lock": [None],
-            "moisture": [None],
-            "motion": [None],
-            "moving": [None],
-            "occupancy": [None],
-            "opening": [None],
-            "plug": [None],
-            "power": [None],
-            "presence": [None],
-            "problem": [None],
-            "running": [None],
-            "safety": [None],
-            "smoke": [None],
-            "sound": [None],
-            "tamper": [None],
-            "update": [None],
-            "vibration": [None],
-            "window": [None],
-        },
-
-        # BUTTON — units never apply
-        "button": {
-            None: [None],
-            "identify": [None],
-            "restart": [None],
-            "update": [None],
-        },
-
-        # COVER — units never apply
-        "cover": {
-            None: [None],
-            "awning": [None],
-            "blind": [None],
-            "curtain": [None],
-            "damper": [None],
-            "door": [None],
-            "garage": [None],
-            "gate": [None],
-            "shade": [None],
-            "shutter": [None],
-            "window": [None],
-        },
-
-        # EVENT — units never apply
-        "event": {
-            None: [None],
-            "button": [None],
-            "doorbell": [None],
-            "motion": [None],
-        },
-
-        # HUMIDIFIER — units never apply
-        "humidifier": {
-            "humidifier": [None],
-            "dehumidifier": [None],
-        },
-
-        # MEDIA PLAYER — units never apply
-        "media_player": {
-            "tv": [None],
-            "speaker": [None],
-            "receiver": [None],
-        },
-
-        # SWITCH — units never apply
-        "switch": {
-            None: [None],
-            "outlet": [None],
-            "switch": [None],
-        },
-
-        # UPDATE — units never apply
-        "update": {
-            None: [None],
-            "firmware": [None],
-        },
-
-        # VALVE — units never apply
-        "valve": {
-            None: [None],
-            "water": [None],
-            "gas": [None],
-        },
+def get_entity_spec_help_links(platform: Component | None = None) -> List[str]:
+    additional_help = {
+        Component.BINARY_SENSOR: "https://www.home-assistant.io/integrations/binary_sensor/#device-class",
+        Component.BUTTON: "https://www.home-assistant.io/integrations/button/#device-class",
+        Component.COVER: "https://www.home-assistant.io/integrations/cover/#device-class",
+        Component.EVENT: "https://www.home-assistant.io/integrations/event/#device-class",
+        Component.HUMIDIFIER: "https://www.home-assistant.io/integrations/humidifier/#device-class",
+        Component.MEDIA_PLAYER: "https://www.home-assistant.io/integrations/media_player/#device-class",
+        Component.NUMBER: "https://www.home-assistant.io/integrations/number/#device-class",
+        Component.SENSOR: "https://www.home-assistant.io/integrations/sensor#device-class",
+        Component.SWITCH: "https://www.home-assistant.io/integrations/switch/#device-class",
+        Component.UPDATE: "https://www.home-assistant.io/integrations/update/#device-class",
+        Component.VALVE: "https://www.home-assistant.io/integrations/valve/#device-class"
     }
+    help_links = ["https://www.home-assistant.io/integrations/homeassistant/#device-class"]
+    if platform in additional_help:
+        help_links.append(additional_help[platform])
+    return help_links
 
 
-def get_entity_spec_help_links(platform: str) -> List[str]:
-    return [
-                "https://www.home-assistant.io/integrations/homeassistant/#device-class",
-                {
-                    "binary_sensor": "https://www.home-assistant.io/integrations/binary_sensor/#device-class",
-                    "button": "https://www.home-assistant.io/integrations/button/#device-class",
-                    "cover": "https://www.home-assistant.io/integrations/cover/#device-class",
-                    "event": "https://www.home-assistant.io/integrations/event/#device-class",
-                    "humidifier": "https://www.home-assistant.io/integrations/humidifier/#device-class",
-                    "media_player": "https://www.home-assistant.io/integrations/media_player/#device-class",
-                    "number": "https://www.home-assistant.io/integrations/number/#device-class",
-                    "sensor": "https://www.home-assistant.io/integrations/sensor#device-class",
-                    "switch": "https://www.home-assistant.io/integrations/switch/#device-class",
-                    "update": "https://www.home-assistant.io/integrations/update/#device-class",
-                    "valve": "https://www.home-assistant.io/integrations/valve/#device-class"
-                }[platform]
-            ]
+def _validate_platform(platform: Component, allowed_config) -> Component:
+    if platform not in allowed_config:
+        allowed_platforms = sorted(allowed_config.keys())
+        raise ValueError(f"Unsupported platform '{platform}'. Allowed: {allowed_platforms}. See {get_entity_spec_help_links()}")
+    return platform
 
 
-def validate_entity_spec(
-    platform: str,
-    device_class: str | None,
-    unit_of_measurement: str | None,
-) -> Tuple[str, str | None, str | None]:
+def validate_entity_specification(
+    platform: Component,
+    device_class: BaseDeviceClass,
+    unit: BaseUnit,
+) -> Tuple[Component, Any, Any]:
     """
     Validate a Home Assistant entity specification.
 
@@ -409,34 +205,17 @@ def validate_entity_spec(
       If a class lists [None], no unit is allowed.
       Special case: device_class 'monetary' accepts any ISO-4217 3-letter code.
     """
-    allowed_config = get_allowed_configs()
 
-    if platform not in allowed_config:
-        allowed_platforms = sorted(allowed_config.keys())
-        raise ValueError(
-            f"Unsupported platform '{platform}'. Allowed: {allowed_platforms}. See {get_entity_spec_help_links('sensor')}"
-        )
-
-    allowed_device_class_map = allowed_config[platform]
-    if device_class not in allowed_device_class_map:
-        allowed_dcs = sorted([str(k) for k in allowed_device_class_map.keys()])
+    if device_class not in platform.device_class:
         raise ValueError(
             f"Invalid device_class '{device_class}' for platform '{platform}'. "
-            f"Allowed: {allowed_dcs}. See {get_entity_spec_help_links(platform)}"
+            f"Allowed: {platform.device_class}. See {get_entity_spec_help_links(platform)}"
         )
 
-    allowed_units = allowed_device_class_map[device_class]
-    # If allowed_units contains the literal "<ISO 4217 currency code>", accept any ISO-4217 code too (sensor mapping).
-    if "<ISO 4217 currency code>" in allowed_units:
-        if unit_of_measurement is None or not re.match(r"^[A-Z]{3}$", unit_of_measurement):
-            raise ValueError(
-                f"Invalid unit '{unit_of_measurement}' for {platform} with device_class 'monetary'. "
-                f"Allowed: 3-letter ISO 4217 currency code. See {get_entity_spec_help_links(platform)}"
-            )
-    elif unit_of_measurement not in allowed_units:
+    if unit not in platform.device_class.unit and type(unit) is not MonetaryUnit:
         raise ValueError(
-            f"Invalid unit_of_measurement '{unit_of_measurement}' for platform '{platform}' and device_class '{device_class}'. "
-            f"Allowed: {allowed_units}. See {get_entity_spec_help_links(platform)}"
+            f"Invalid unit '{unit}' for platform '{platform}' and device_class '{device_class}'. "
+            f"Allowed: {platform.device_class.unit}. See {get_entity_spec_help_links(platform)}"
         )
 
-    return platform, device_class, unit_of_measurement
+    return platform, device_class, unit

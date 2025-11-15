@@ -1,40 +1,54 @@
 from __future__ import annotations
-from simplehomeassistant.helper import validate_node_id, validate_object_id, validate_component
+from typing import Callable, Union, List
 
+from simplemqtt import MQTTConnectionV3, MQTTConnectionV5
+
+from simplehomeassistant.features import Availability
+from simplehomeassistant.helper import validate_non_empty_string, build_identifier
+from simplehomeassistant.helper.abbreviations import Abbreviation
+from simplehomeassistant.helper.scheduler import Schedule
+from simplehomeassistant.types.component import Component
 
 
 class HomeAssistantEntityBase:
-    def __init__(self, component, object_id):
-        self._component = validate_component(component)
-        self._node_id = None
-        self._object_id = validate_object_id(object_id)
+    def __init__(self, component: Component, name):
+        validate_non_empty_string(name, "Entity 'name'")
+        self._schedules: List[Schedule] = []
+        self._name = name
+        self._component = component
 
-    @property
-    def has_node_id(self):
-        return self._node_id is not None
+        self.availability = Availability()
 
-    def node_id(self, node_id: str | None) -> HomeAssistantEntityBase:
-        self._node_id = validate_node_id(node_id)
+    def add_schedule(self, interval: float, function: Callable[[Union[MQTTConnectionV3, MQTTConnectionV5]], None]):
+        self._schedules.append(Schedule(interval, function))
         return self
 
-    def object_id(self, object_id: str) -> HomeAssistantEntityBase:
-        self._object_id = validate_node_id(object_id)
-        return self
-
-    def _get_relative_identity(self, seperator: str):
-        node_id = f"{self._node_id}{seperator}" if self.has_node_id else ""
-        return f"{self._component}{seperator}{node_id}{self._object_id}"
+    @property
+    def schedules(self):
+        return self._schedules
 
     @property
-    def relative_unique_id(self) -> str:
-        return self._get_relative_identity("-")
+    def identifier(self):
+        return build_identifier(self._name)
 
     @property
-    def relative_discovery_prefix(self):
-        return f"{self._get_relative_identity('/')}/config"
+    def name(self):
+        return self._name
 
     @property
-    def discovery_payload(self):
+    def platform(self):
+        return self._component
+
+    @property
+    def internal_discovery_payload(self):
         return {
-
+            "component": self._component.value,
+            Abbreviation.NAME: self._name,
+            **self.availability.internal_to_dict()
         }
+
+    def home_assistant_birth(self, connection: Union[MQTTConnectionV3, MQTTConnectionV5]):
+        pass
+
+    def home_assistant_death(self, connection: Union[MQTTConnectionV3, MQTTConnectionV5]):
+        pass

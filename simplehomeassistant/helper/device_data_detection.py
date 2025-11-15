@@ -1,12 +1,12 @@
 from __future__ import annotations
-from typing import Optional, Set, Tuple
+from typing import Optional, Set, Tuple, List
 
 Connection = Tuple[str, str]
 CONN_MAC = "mac"
 CONN_BT = "bluetooth"
 
 
-def collect_ha_device_facts(prevent_merge: bool = False) -> tuple[Optional[str], Set[Connection]]:
+def collect_ha_device_facts(prevent_merge: bool = False) -> tuple[Optional[str], List[Connection]]:
     serial: Optional[str] = None
     connections: Set[Connection] = set()
     runtime = _detect_runtime()
@@ -38,8 +38,7 @@ def collect_ha_device_facts(prevent_merge: bool = False) -> tuple[Optional[str],
         except Exception:
             pass
 
-    connections = _normalize_connections(connections)
-    return serial, connections
+    return serial, _normalize_connections(connections)
 
 
 # ---------- runtime detection ----------
@@ -60,7 +59,6 @@ def _detect_runtime() -> str:
 
 
 # ---------- normalization ----------
-
 def _normalize_mac(s: str) -> Optional[str]:
     if not isinstance(s, str):
         return None
@@ -69,6 +67,7 @@ def _normalize_mac(s: str) -> Optional[str]:
         return None
     return ":".join(raw[i:i+2] for i in range(0, 12, 2))
 
+
 def _is_global_mac(mac: str) -> bool:
     try:
         first = int(mac.split(":", 1)[0], 16)
@@ -76,7 +75,8 @@ def _is_global_mac(mac: str) -> bool:
     except Exception:
         return False
 
-def _normalize_connections(conns: Set[Connection]) -> Set[Connection]:
+
+def _normalize_connections(conns: Set[Connection]) -> List[Connection]:
     out: Set[Connection] = set()
     for k, v in conns:
         mac = _normalize_mac(v or "")
@@ -89,7 +89,8 @@ def _normalize_connections(conns: Set[Connection]) -> Set[Connection]:
                 out.add((CONN_MAC, mac))
         elif k == CONN_BT:
             out.add((CONN_BT, mac))           # accept BT even if locally administered
-    return out
+    return list(out)
+
 
 def _run_cmd(cmd: list[str]) -> str:
     try:
@@ -100,7 +101,6 @@ def _run_cmd(cmd: list[str]) -> str:
 
 
 # ---------- MicroPython ----------
-
 def _conns_mpy() -> Set[Connection]:
     out: Set[Connection] = set()
     try:
@@ -124,6 +124,7 @@ def _conns_mpy() -> Set[Connection]:
         pass
     return out
 
+
 def _serial_mpy() -> Optional[str]:
     try:
         import binascii  # type: ignore
@@ -139,7 +140,6 @@ def _serial_mpy() -> Optional[str]:
 
 
 # ---------- Linux ----------
-
 def _conns_linux() -> Set[Connection]:
     out: Set[Connection] = set()
     try:
@@ -156,13 +156,17 @@ def _conns_linux() -> Set[Connection]:
         pass
     try:
         from pathlib import Path
+        # allow Bluetooth only if controller reports a public address
+        info = _run_cmd(["btmgmt", "info"]).lower()
+        is_public = "public address" in info
+
         root = Path("/sys/class/bluetooth")
         if root.exists():
             for ctrl in root.iterdir():
                 try:
                     addr = (ctrl / "address").read_text().strip()
                     mac = _normalize_mac(addr)
-                    if mac:
+                    if mac and is_public:
                         out.add((CONN_BT, mac))
                 except Exception:
                     continue
@@ -172,11 +176,12 @@ def _conns_linux() -> Set[Connection]:
                 parts = line.strip().split()
                 if parts[:1] == ["Controller"] and len(parts) >= 2:
                     mac = _normalize_mac(parts[1])
-                    if mac:
+                    if mac and is_public:
                         out.add((CONN_BT, mac))
     except Exception:
         pass
     return out
+
 
 def _serial_linux() -> Optional[str]:
     for path in (
@@ -204,7 +209,6 @@ def _serial_linux() -> Optional[str]:
 
 
 # ---------- macOS ----------
-
 def _conns_macos() -> Set[Connection]:
     out: Set[Connection] = set()
     try:
@@ -223,12 +227,14 @@ def _conns_macos() -> Set[Connection]:
             line = line.strip()
             if line.lower().startswith("address:"):
                 mac = _normalize_mac(line.split(":", 1)[1].strip())
-                if mac:
+                # accept BT only if it looks globally administered (public)
+                if mac and _is_global_mac(mac):
                     out.add((CONN_BT, mac))
                     break
     except Exception:
         pass
     return out
+
 
 def _serial_macos() -> Optional[str]:
     try:
@@ -244,7 +250,6 @@ def _serial_macos() -> Optional[str]:
 
 
 # ---------- Windows ----------
-
 def _conns_windows() -> Set[Connection]:
     out: Set[Connection] = set()
     try:
@@ -265,11 +270,13 @@ def _conns_windows() -> Set[Connection]:
                 cols = [c.strip() for c in row.split(",")]
                 if len(cols) >= 3 and "bluetooth" in cols[2].lower():
                     mac = _normalize_mac(cols[1])
-                    if mac:
+                    # accept BT only if it looks globally administered (public)
+                    if mac and _is_global_mac(mac):
                         out.add((CONN_BT, mac))
         except Exception:
             pass
     return out
+
 
 def _serial_windows() -> Optional[str]:
     try:

@@ -1,4 +1,4 @@
-from .validation import (validate_discovery_prefix, validate_node_id, validate_object_id, validate_component,
-                         validate_entity_spec, validate_icon)
-from .device_identifier_detection import collect_ha_device_facts
-from .id_generator import build_identifier
+from .validation import (validate_discovery_prefix, validate_platform, validate_entity_specification, validate_icon,
+                         validate_topic, validate_non_empty_string)
+from .device_data_detection import collect_ha_device_facts
+from .naming import get_default_entity_id, build_identifier
