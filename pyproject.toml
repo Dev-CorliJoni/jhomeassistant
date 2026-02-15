@@ -1,5 +1,5 @@
 [project]
-name = "simple-homeassistant"
+name = "jhomeassistant"
 description = "Framework for building easy Home Assistant devices"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.8"
@@ -27,22 +27,22 @@ classifiers = [
 dynamic = ["version","dependencies"]
 
 [project.urls]
-GitHub = "https://github.com/Dev-CorliJoni/simple-homeassistant"
-Source   = "https://github.com/Dev-CorliJoni/simple-homeassistant"
-Issues   = "https://github.com/Dev-CorliJoni/simple-homeassistant/issues"
+GitHub = "https://github.com/Dev-CorliJoni/jhomeassistant"
+Source   = "https://github.com/Dev-CorliJoni/jhomeassistant"
+Issues   = "https://github.com/Dev-CorliJoni/jhomeassistant/issues"
 Instagram  = "https://www.instagram.com/dev.corlijoni/"
 
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["simplehomeassistant*"]
+include = ["jhomeassistant*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-simplehomeassistant = ["py.typed"]
+jhomeassistant = ["py.typed"]
 
 [tool.setuptools.dynamic]
-version = { attr = "simplehomeassistant.__version__" }
+version = { attr = "jhomeassistant.__version__" }
 dependencies = { file = "requirements.txt" }
 
 [build-system]

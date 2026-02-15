@@ -5,6 +5,7 @@
 
 dist
 tests/docker/mosquitto
+build
 
 simple_homeassistant.egg-info
 venv
