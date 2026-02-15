@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 from typing import List, Union
-from simplemqtt import QualityOfService as QoS, MQTTMessage
-from simplemqtt.mqtt_connections import MQTTConnectionV3, MQTTConnectionV5
+from jmqtt import QualityOfService as QoS, MQTTMessage, MQTTConnectionV3, MQTTConnectionV5
 
 from jhomeassistant.features import Availability, Origin, TopicConfig
 from jhomeassistant.helper import validate_discovery_prefix
 from jhomeassistant.helper.abbreviations import resolve_abbreviation
-from jhomeassistant.helper.scheduler import Scheduler, Schedule
+from jhomeassistant.helper.scheduler import Scheduler
 from jhomeassistant.homeassistant_device import HomeAssistantDevice
 from jhomeassistant.setup_logging import get_logger
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 import secrets
 import time
@@ -9,10 +8,10 @@ import queue
 import threading
 import pytest
 
-from simplemqtt import MQTTBuilderV3
-from simplemqtt.types import QualityOfService as QoS
+from jmqtt import MQTTBuilderV3
+from jmqtt.types import QualityOfService as QoS
 
-REQUIRED_KEYS = ("MQTT_CLIENT_ID", "MQTT_HOST")
+REQUIRED_KEYS = ("MQTT_APP_NAME", "MQTT_HOST")
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -28,7 +27,7 @@ def broker_env():
     if missing:
         pytest.skip(f"Missing environment variables: {', '.join(missing)}")
     return {
-        "client_id": os.environ["MQTT_CLIENT_ID"],
+        "app_name": os.environ["MQTT_APP_NAME"],
         "host": os.environ["MQTT_HOST"],
         "port": int(os.environ.get("MQTT_PORT", 1883)),
         "keepalive": int(os.environ.get("MQTT_KEEPALIVE", 60)),
@@ -47,14 +46,13 @@ def broker_env():
 
 
 def generate_rand_str(length: int = 16) -> str:
-    # Uniform URL-safe string, 6 bits per char
-    nbytes = (length * 6 + 7) // 8  # integer ceil(length*3/4)
-    return base64.urlsafe_b64encode(secrets.token_bytes(nbytes)).rstrip(b"=").decode("ascii")[:length]
+    alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 @pytest.fixture(scope="session")
 def mqtt_builder(broker_env):
-    b = MQTTBuilderV3(f"{broker_env['client_id']}{generate_rand_str()}", broker_env["host"])
+    b = MQTTBuilderV3(broker_env["host"], broker_env["app_name"]).instance_id(generate_rand_str(8))
     b.port(broker_env["port"]).keep_alive(broker_env["keepalive"])
 
     if broker_env["username"] and broker_env["password"]:
@@ -118,7 +116,7 @@ def topic_registry():
 
 @pytest.fixture()
 def unique_topic(broker_env, topic_registry):
-    base = broker_env["base_test_topic"] or f"{broker_env['client_id']}/tests"
+    base = broker_env["base_test_topic"] or f"{broker_env['app_name']}/tests"
 
     def _mk(suffix: str = ""):
         u = uuid.uuid4().hex[:8]
@@ -158,14 +156,14 @@ def after_all_clear_retained(broker_env, topic_registry):
     """
     yield
 
-    base = broker_env["base_test_topic"] or f"{broker_env['client_id']}/tests"
+    base = broker_env["base_test_topic"] or f"{broker_env['app_name']}/tests"
     targets = topic_registry["snapshot"]() | {base}
 
     if broker_env.get("availability_topic"):
         targets.add(broker_env["availability_topic"])
 
-    sweeper = MQTTBuilderV3(f"{broker_env['client_id']}-sweep", broker_env["host"]) \
-        .port(broker_env["port"]).keep_alive(broker_env["keepalive"])
+    sweeper = MQTTBuilderV3(broker_env["host"], broker_env["app_name"]) \
+        .instance_id("sweep").port(broker_env["port"]).keep_alive(broker_env["keepalive"])
 
     if broker_env["username"] and broker_env["password"]:
         sweeper.login(broker_env["username"], broker_env["password"])

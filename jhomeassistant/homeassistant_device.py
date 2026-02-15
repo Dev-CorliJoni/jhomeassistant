@@ -1,10 +1,9 @@
 from __future__ import annotations
 from typing import List
 
-from simplemqtt import QualityOfService as QoS
+from jmqtt import QualityOfService as QoS, client_identity
 from jhomeassistant.features import Availability
-from jhomeassistant.helper import collect_ha_device_facts, build_identifier, get_default_entity_id, \
-    validate_non_empty_string
+from jhomeassistant.helper import get_default_entity_id, validate_non_empty_string
 from jhomeassistant.entities import HomeAssistantEntityBase
 from jhomeassistant.helper.abbreviations import DeviceAbbreviation, Abbreviation
 from jhomeassistant.setup_logging import get_logger as _get_logger
@@ -16,14 +15,14 @@ def get_identifier_default(serial_number, connections, prevent_device_merge=Fals
     identifiers = []
     if not prevent_device_merge:
         if serial_number is not None:
-            identifiers.append(build_identifier(serial_number))
+            identifiers.append(client_identity.hashing.build_urlsafe_token(serial_number))
 
         # Priority: mac > bluetooth; within type pick smallest value for stability
         for _, value in sorted(
                 connections,
                 key=lambda x: ((0 if x[0] == "mac" else 1 if x[0] == "bluetooth" else 2), x[1])
         ):
-            identifiers.append(build_identifier(value))
+            identifiers.append(client_identity.hashing.build_urlsafe_token(value))
             break
     return identifiers
 
@@ -33,7 +32,9 @@ class HomeAssistantDevice:
         validate_non_empty_string(name, "Device 'name'")
 
         self.name = name
-        self.serial_number, self.connections = collect_ha_device_facts(prevent_device_merge)
+        self.serial_number, self.connections = client_identity.facts.collect_device_facts()
+        if prevent_device_merge:
+            self.connections = []
         self.identifiers: List[str] = get_identifier_default(self.serial_number, self.connections, prevent_device_merge)
 
         if not self.identifiers:
@@ -83,7 +84,7 @@ class HomeAssistantDevice:
 
     @property
     def unique_id(self):
-        return build_identifier(self.identifiers[0], 32, self.name)
+        return client_identity.hashing.build_urlsafe_token(self.identifiers[0], 32, self.name)
 
     @property
     def entities(self) -> List[HomeAssistantEntityBase]:

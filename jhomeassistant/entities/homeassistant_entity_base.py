@@ -1,10 +1,10 @@
 from __future__ import annotations
 from typing import Callable, Union, List
 
-from simplemqtt import MQTTConnectionV3, MQTTConnectionV5
+from jmqtt import MQTTConnectionV3, MQTTConnectionV5, client_identity
 
 from jhomeassistant.features import Availability
-from jhomeassistant.helper import validate_non_empty_string, build_identifier
+from jhomeassistant.helper import validate_non_empty_string
 from jhomeassistant.helper.abbreviations import Abbreviation
 from jhomeassistant.helper.scheduler import Schedule
 from jhomeassistant.types.component import Component
@@ -29,7 +29,7 @@ class HomeAssistantEntityBase:
 
     @property
     def identifier(self):
-        return build_identifier(self._name)
+        return client_identity.hashing.build_urlsafe_token(self._name)
 
     @property
     def name(self):
