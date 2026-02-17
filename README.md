@@ -44,7 +44,15 @@ device = HomeAssistantDevice("Kitchen Sensor").add_entities(entity)
 
 # 4) Register and run discovery + scheduler loop
 ha.add_devices(device)
+
+# Blocking mode (current default behavior)
 ha.run()
+
+# Non-blocking mode with runtime handle (alternative)
+# runtime = ha.run(blocking=False)
+# print(runtime.is_running)
+# runtime.stop(timeout=5.0)
+# runtime.join(timeout=5.0)
 ```
 
 ## Core Concepts
@@ -90,6 +98,22 @@ Common fields:
 
 `HomeAssistantConnection.discovery_text()` returns formatted discovery topics + payloads,
 useful for debugging and tests.
+
+## Runtime Control
+
+`HomeAssistantConnection.run(...)` supports both runtime styles:
+
+- `ha.run()` or `ha.run(blocking=True)`:
+  runs discovery + HA status subscription + scheduler in the caller thread.
+- `runtime = ha.run(blocking=False)`:
+  starts the same runtime in a background thread and returns `HomeAssistantRuntime`.
+
+Runtime handle API:
+
+- `runtime.is_running`
+- `runtime.last_error`
+- `runtime.stop(timeout=...)`
+- `runtime.join(timeout=...) -> bool`
 
 ## Notes
 

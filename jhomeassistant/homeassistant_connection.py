@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import List, Union
 from jmqtt import QualityOfService as QoS, MQTTMessage, MQTTConnectionV3, MQTTConnectionV5
 
@@ -9,10 +10,18 @@ from jhomeassistant.helper import validate_discovery_prefix
 from jhomeassistant.helper.abbreviations import resolve_abbreviation
 from jhomeassistant.helper.scheduler import Scheduler
 from jhomeassistant.homeassistant_device import HomeAssistantDevice
+from jhomeassistant.homeassistant_runtime import HomeAssistantRuntime
+from jhomeassistant.homeassistant_runtime_record import _RuntimeRecord
 from jhomeassistant.setup_logging import get_logger
 
 
 logger = get_logger("HomeAssistantConnection")
+
+_RUNTIME_IDLE = "idle"
+_RUNTIME_RUNNING = "running"
+_RUNTIME_STOPPING = "stopping"
+_RUNTIME_STOPPED = "stopped"
+_RUNTIME_ACTIVE_STATES = {_RUNTIME_RUNNING, _RUNTIME_STOPPING}
 
 
 def resolve_abbreviations(payload: dict, use_abbreviated_device_discovery: bool) -> dict:
@@ -38,7 +47,6 @@ def resolve_abbreviations(payload: dict, use_abbreviated_device_discovery: bool)
         new_payload[key] = value
     return new_payload
 
-
 class HomeAssistantConnection:
     def __init__(self, connection: Union[MQTTConnectionV3, MQTTConnectionV5], use_abbreviated_device_discovery=False):
         self._use_abbreviated_device_discovery = use_abbreviated_device_discovery
@@ -51,6 +59,9 @@ class HomeAssistantConnection:
         self.ha_status = TopicConfig("homeassistant/status")
         self.qos: QoS | None = None
         self.encoding: str | None = None
+
+        self._runtime_lock = threading.RLock()
+        self._runtime: _RuntimeRecord | None = None
 
     def discovery_prefix(self, discovery_prefix: str) -> HomeAssistantConnection:
         self._discovery_prefix = validate_discovery_prefix(discovery_prefix)
@@ -125,15 +136,136 @@ class HomeAssistantConnection:
             else:
                 logger.warning(f"Unknown Home Assistant status(topic={self._discovery_prefix}/status) message {message}")
 
-    def run(self, schedule_resolution: float = 1.0, publish_timeout: float | None = None):
-        if not self._connection.is_connected:
-            self._connection.connect()
+    def _runtime_cleanup(self, runtime: _RuntimeRecord) -> None:
+        runtime.stop_event.set()
 
-        self._discovery(publish_timeout)
+        try:
+            self._connection.unsubscribe(self.ha_status.topic)
+        except Exception as exc:
+            logger.debug(f"Failed to unsubscribe Home Assistant status topic ({self.ha_status.topic}): {exc}")
 
-        # Subscribe HA Status
-        self._connection.subscribe(self.ha_status.topic, self.homeassistant_status)
+        with self._runtime_lock:
+            runtime.state = _RUNTIME_STOPPED
+            runtime.done_event.set()
+            if self._runtime is runtime:
+                self._runtime = None
 
-        # register publishers with interval
-        tasks = [schedule for entity in self._entities() for schedule in entity.schedules]
-        Scheduler(*tasks).run_forever(schedule_resolution, self._connection)
+    def _runtime_execute(self, runtime: _RuntimeRecord, schedule_resolution: float, publish_timeout: float | None, re_raise_errors: bool) -> None:
+        with self._runtime_lock:
+            runtime.owner_thread_id = threading.get_ident()
+
+        try:
+            if not self._connection.is_connected:
+                self._connection.connect()
+
+            self._discovery(publish_timeout)
+            self._connection.subscribe(self.ha_status.topic, self.homeassistant_status)
+
+            tasks = [schedule for entity in self._entities() for schedule in entity.schedules]
+            Scheduler(*tasks).run_forever(
+                schedule_resolution,
+                self._connection,
+                stop_event=runtime.stop_event,
+            )
+        except Exception as exc:
+            with self._runtime_lock:
+                runtime.last_error = exc
+            logger.exception(f"Home Assistant runtime failed: {exc}")
+            if re_raise_errors:
+                raise
+        finally:
+            self._runtime_cleanup(runtime)
+
+    def _runtime_stop(self, runtime: _RuntimeRecord, timeout: float | None = None) -> None:
+        with self._runtime_lock:
+            if runtime.state in {_RUNTIME_IDLE, _RUNTIME_STOPPED}:
+                return
+            if runtime.state == _RUNTIME_RUNNING:
+                runtime.state = _RUNTIME_STOPPING
+            runtime.stop_event.set()
+
+        if timeout is not None:
+            self._runtime_join(runtime, timeout)
+
+    def _runtime_join(self, runtime: _RuntimeRecord, timeout: float | None = None) -> bool:
+        return runtime.done_event.wait(timeout)
+
+    def _runtime_is_running(self, runtime: _RuntimeRecord) -> bool:
+        with self._runtime_lock:
+            return self._runtime_is_active_unlocked(runtime)
+
+    def _runtime_last_error(self, runtime: _RuntimeRecord) -> Exception | None:
+        with self._runtime_lock:
+            return runtime.last_error
+
+    def run(self, schedule_resolution: float = 1.0, publish_timeout: float | None = None, blocking: bool = True) -> HomeAssistantRuntime | None:
+        thread_to_start = None
+        create_new_runtime = False
+
+        with self._runtime_lock:
+            runtime = self._runtime
+            if runtime is not None and self._runtime_is_active_unlocked(runtime):
+                handle = self._runtime_handle_unlocked(runtime)
+            else:
+                runtime = _RuntimeRecord(_RUNTIME_RUNNING)
+                handle = self._runtime_handle_unlocked(runtime)
+                self._runtime = runtime
+                create_new_runtime = True
+
+                if not blocking:
+                    thread = threading.Thread(
+                        target=self._runtime_execute,
+                        kwargs={
+                            "runtime": runtime,
+                            "schedule_resolution": schedule_resolution,
+                            "publish_timeout": publish_timeout,
+                            "re_raise_errors": False,
+                        },
+                        name="jhomeassistant-runtime",
+                        daemon=True,
+                    )
+                    runtime.thread = thread
+                    thread_to_start = thread
+
+        if not create_new_runtime:
+            if blocking:
+                with self._runtime_lock:
+                    owner_thread_id = runtime.owner_thread_id
+                if owner_thread_id == threading.get_ident():
+                    logger.warning("Home Assistant runtime is already running in the current thread.")
+                    return None
+
+                handle.join()
+                if handle.last_error is not None:
+                    raise handle.last_error
+                return None
+            return handle
+
+        if thread_to_start is not None:
+            thread_to_start.start()
+            return handle
+
+        self._runtime_execute(runtime, schedule_resolution, publish_timeout, re_raise_errors=True)
+        return None
+
+    def _runtime_is_active_unlocked(self, runtime: _RuntimeRecord) -> bool:
+        return runtime.state in _RUNTIME_ACTIVE_STATES and not runtime.done_event.is_set()
+
+    def _runtime_handle_unlocked(self, runtime: _RuntimeRecord) -> HomeAssistantRuntime:
+        if runtime.handle is None:
+            runtime.handle = HomeAssistantRuntime(self, runtime)
+        return runtime.handle
+
+    def runtime(self) -> HomeAssistantRuntime | None:
+        with self._runtime_lock:
+            if self._runtime is None:
+                return None
+            if not self._runtime_is_active_unlocked(self._runtime):
+                return None
+            return self._runtime_handle_unlocked(self._runtime)
+
+    def stop(self, timeout: float | None = None) -> None:
+        runtime = self.runtime()
+        if runtime is None:
+            return
+        runtime.stop(timeout)
