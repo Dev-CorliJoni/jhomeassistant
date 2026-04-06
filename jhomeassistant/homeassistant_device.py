@@ -11,31 +11,43 @@ from jhomeassistant.setup_logging import get_logger as _get_logger
 logger = _get_logger("HomeAssistantDevice")
 
 
-def get_identifier_default(serial_number, connections, prevent_device_merge=False):
+def get_identifier_default(serial_number, connections):
     identifiers = []
-    if not prevent_device_merge:
-        if serial_number is not None:
-            identifiers.append(client_identity.hashing.build_urlsafe_token(serial_number))
+    if serial_number is not None:
+        identifiers.append(client_identity.hashing.build_urlsafe_token(serial_number))
 
-        # Priority: mac > bluetooth; within type pick smallest value for stability
-        for _, value in sorted(
-                connections,
-                key=lambda x: ((0 if x[0] == "mac" else 1 if x[0] == "bluetooth" else 2), x[1])
-        ):
-            identifiers.append(client_identity.hashing.build_urlsafe_token(value))
-            break
+    # Priority: mac > bluetooth; within type pick smallest value for stability
+    for _, value in sorted(
+            connections,
+            key=lambda x: ((0 if x[0] == "mac" else 1 if x[0] == "bluetooth" else 2), x[1])
+    ):
+        identifiers.append(client_identity.hashing.build_urlsafe_token(value))
+        break
     return identifiers
 
 
 class HomeAssistantDevice:
-    def __init__(self, name: str, prevent_device_merge=False):
+    def __init__(self, name: str, identifier: str | None = None):
+        """
+        Args:
+            name: Display name of the device in Home Assistant.
+            identifier: Stable identifier string for this device (e.g. a remote agent's MAC address).
+                If provided, auto-detection of local hardware (serial number, MAC) is skipped
+                and this string is hashed as the sole device identifier.
+                If None, identifiers are auto-detected from local hardware.
+                Additional identifiers can be appended afterwards via ``device.identifiers.append(...)``.
+        """
         validate_non_empty_string(name, "Device 'name'")
 
         self.name = name
-        self.serial_number, self.connections = client_identity.facts.collect_device_facts()
-        if prevent_device_merge:
+
+        if identifier is not None:
+            self.serial_number = None
             self.connections = []
-        self.identifiers: List[str] = get_identifier_default(self.serial_number, self.connections, prevent_device_merge)
+            self.identifiers: List[str] = [client_identity.hashing.build_urlsafe_token(identifier)]
+        else:
+            self.serial_number, self.connections = client_identity.facts.collect_device_facts()
+            self.identifiers: List[str] = get_identifier_default(self.serial_number, self.connections)
 
         if not self.identifiers:
             logger.error("No device identifiers could be derived. Set at least one identifier explicitly before discovery.")

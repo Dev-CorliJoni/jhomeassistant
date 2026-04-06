@@ -63,6 +63,10 @@ class HomeAssistantConnection:
         self._runtime_lock = threading.RLock()
         self._runtime: _RuntimeRecord | None = None
 
+    def get_connection(self) -> Union[MQTTConnectionV3, MQTTConnectionV5]:
+        """Returns the active MQTT connection. Passed to entities and the scheduler."""
+        return self._connection
+
     def discovery_prefix(self, discovery_prefix: str) -> HomeAssistantConnection:
         self._discovery_prefix = validate_discovery_prefix(discovery_prefix)
         return self
@@ -155,8 +159,18 @@ class HomeAssistantConnection:
             runtime.owner_thread_id = threading.get_ident()
 
         try:
+            def on_mqtt_connect(*_args):
+                for entity in self._entities():
+                    entity.mqtt_connected(self.get_connection)
+
+            self._connection.add_on_connect(on_mqtt_connect)
+
             if not self._connection.is_connected:
+                # on_mqtt_connect will be triggered via the registered add_on_connect hook
                 self._connection.connect()
+            else:
+                for entity in self._entities():
+                    entity.mqtt_connected(self.get_connection)
 
             self._discovery(publish_timeout)
             self._connection.subscribe(self.ha_status.topic, self.homeassistant_status)
@@ -164,7 +178,7 @@ class HomeAssistantConnection:
             tasks = [schedule for entity in self._entities() for schedule in entity.schedules]
             Scheduler(*tasks).run_forever(
                 schedule_resolution,
-                self._connection,
+                self.get_connection,
                 stop_event=runtime.stop_event,
             )
         except Exception as exc:
