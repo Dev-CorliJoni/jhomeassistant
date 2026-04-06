@@ -20,3 +20,6 @@ class StatefulEntity(HomeAssistantEntityBase):
             **super().internal_discovery_payload,
             Abbreviation.STATE_TOPIC: self._state_topic,
         }
+        
+    def _publish_state(self, payload: str) -> None:
+        self._get_connection().publish(self._state_topic, payload)

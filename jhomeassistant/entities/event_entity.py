@@ -23,7 +23,7 @@ class EventEntity(StatefulEntity):
 
     def publish(self, event_type: str, **attributes: Any) -> None:
         payload = json.dumps({"event_type": event_type, **attributes}, separators=(",", ":"))
-        self._get_connection().publish(self._state_topic, payload)
+        self._publish_state(payload)
 
     @property
     def internal_discovery_payload(self) -> dict:

@@ -26,7 +26,7 @@ class SensorEntity(StatefulEntity):
         self._entity_category = entity_category
 
     def publish(self, value: Union[str, int, float]) -> None:
-        self._get_connection().publish(self._state_topic, str(value))
+        self._publish_state(str(value))
 
     @property
     def internal_discovery_payload(self) -> dict:
