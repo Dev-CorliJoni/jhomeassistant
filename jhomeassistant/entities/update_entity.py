@@ -33,7 +33,7 @@ class UpdateEntity(StatefulEntity, CommandableEntity):
             "installed_version": installed_version,
             "latest_version": latest_version,
         }, separators=(",", ":"))
-        self._connection.publish(self._state_topic, payload)
+        self._get_connection().publish(self._state_topic, payload)
 
     @property
     def internal_discovery_payload(self) -> dict:

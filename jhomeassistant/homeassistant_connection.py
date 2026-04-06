@@ -64,7 +64,13 @@ class HomeAssistantConnection:
         self._runtime: _RuntimeRecord | None = None
 
     def get_connection(self) -> Union[MQTTConnectionV3, MQTTConnectionV5]:
-        """Returns the active MQTT connection. Passed to entities and the scheduler."""
+        """Returns the active MQTT connection. Passed to entities and the scheduler.
+        Raises RuntimeError if mqtt_connected() has not been called on the entity yet."""
+        if self._connection is None:
+            raise RuntimeError(
+                "No MQTT connection available. "
+                "Ensure HomeAssistantConnection was initialized with a valid connection."
+            )
         return self._connection
 
     def discovery_prefix(self, discovery_prefix: str) -> HomeAssistantConnection:

@@ -26,15 +26,6 @@ class HomeAssistantEntityBase:
         self._schedules.append(Schedule(interval, function))
         return self
 
-    @property
-    def _connection(self) -> MQTTConnection:
-        if self._get_connection is None:
-            raise RuntimeError(
-                f"Entity '{self._name}' has no connection. "
-                "mqtt_connected() must be called before accessing the connection."
-            )
-        return self._get_connection()
-
     def mqtt_connected(self, get_connection: Callable[[], MQTTConnection]) -> None:
         """Called when MQTT connects (and on every reconnect). Stores the connection getter."""
         self._get_connection = get_connection

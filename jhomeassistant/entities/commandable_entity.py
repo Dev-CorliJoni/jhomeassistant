@@ -17,7 +17,7 @@ class CommandableEntity(HomeAssistantEntityBase):
 
     def mqtt_connected(self, get_connection: Callable[[], MQTTConnection]) -> None:
         super().mqtt_connected(get_connection)
-        self._connection.subscribe(self._command_topic, self._on_command)
+        self._get_connection().subscribe(self._command_topic, self._on_command)
 
     @property
     def internal_discovery_payload(self) -> dict:
