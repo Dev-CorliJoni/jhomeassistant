@@ -10,18 +10,19 @@ from jhomeassistant.types.component import Component
 class CommandableEntity(HomeAssistantEntityBase):
     """Base for entities that receive commands via a command_topic."""
 
-    def __init__(self, component: Component, name: str, *, command_topic: str, on_command: Callable, **kwargs: Any) -> None:
+    def __init__(self, component: Component, name: str, *, command_topic: str | None = None, on_command: Callable | None = None, **kwargs: Any) -> None:
         super().__init__(component, name, **kwargs)
-        self._command_topic: str = validate_topic(command_topic)
+        self._command_topic: str | None = validate_topic(command_topic) if command_topic is not None else None
         self._on_command = on_command
 
     def mqtt_connected(self, get_connection: Callable[[], MQTTConnection]) -> None:
         super().mqtt_connected(get_connection)
-        self._get_connection().subscribe(self._command_topic, self._on_command)
+        if self._command_topic is not None:
+            self._get_connection().subscribe(self._command_topic, self._on_command)
 
     @property
     def internal_discovery_payload(self) -> dict:
-        return {
-            **super().internal_discovery_payload,
-            Abbreviation.COMMAND_TOPIC: self._command_topic,
-        }
+        payload = super().internal_discovery_payload
+        if self._command_topic is not None:
+            payload[Abbreviation.COMMAND_TOPIC] = self._command_topic
+        return payload

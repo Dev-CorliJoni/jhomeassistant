@@ -19,8 +19,8 @@ class UpdateEntity(StatefulEntity, CommandableEntity):
     def __init__(self,
                  name: str,
                  state_topic: str,
-                 command_topic: str,
-                 on_install: Callable,
+                 command_topic: str | None = None,
+                 on_install: Callable | None = None,
                  device_class: UpdateDeviceClass = UpdateDeviceClass.NONE) -> None:
         super().__init__(Component.UPDATE, name,
                          state_topic=state_topic,
