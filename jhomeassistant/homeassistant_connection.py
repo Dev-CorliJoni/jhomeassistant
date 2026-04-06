@@ -284,6 +284,9 @@ class HomeAssistantConnection:
                 return None
             return self._runtime_handle_unlocked(self._runtime)
 
+    def republish_discovery(self, publish_timeout: float | None = None) -> None:
+        self._discovery(publish_timeout)
+
     def stop(self, timeout: float | None = None) -> None:
         runtime = self.runtime()
         if runtime is None:
