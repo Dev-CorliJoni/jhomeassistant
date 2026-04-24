@@ -4,6 +4,7 @@ from typing import Callable, Union, List
 from jmqtt import MQTTConnectionV3, MQTTConnectionV5, client_identity
 
 from jhomeassistant.features import Availability
+from jhomeassistant.features.availability.availability_source import AvailabilitySource
 from jhomeassistant.helper import validate_non_empty_string
 from jhomeassistant.helper.abbreviations import Abbreviation
 from jhomeassistant.helper.scheduler import Schedule
@@ -20,7 +21,7 @@ class HomeAssistantEntityBase:
         self._component = component
         self._get_connection: Callable[[], MQTTConnection] | None = None
 
-        self.availability = Availability()
+        self.availability = Availability(source=AvailabilitySource.ENTITY)
 
     def add_schedule(self, interval: float, function: Callable[[MQTTConnection], None]):
         self._schedules.append(Schedule(interval, function))

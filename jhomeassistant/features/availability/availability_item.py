@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from jhomeassistant.features import TopicConfig
+from jhomeassistant.features.availability.availability_source import AvailabilitySource
 from jhomeassistant.helper import validate_non_empty_string
 from jhomeassistant.helper.abbreviations import Abbreviation
 
 
 class AvailabilityItem(TopicConfig):
     def __init__(self, topic: str, payload_available: str = TopicConfig.DEFAULT_AVAILABLE,
-                 payload_not_available: str = TopicConfig.DEFAULT_NOT_AVAILABLE, value_template=None):
+                 payload_not_available: str = TopicConfig.DEFAULT_NOT_AVAILABLE, value_template=None,
+                 source: AvailabilitySource | None = None):
         super().__init__(topic, payload_available, payload_not_available)
         self.value_template = value_template
+        self._source = source
 
     @property
     def value_template(self):

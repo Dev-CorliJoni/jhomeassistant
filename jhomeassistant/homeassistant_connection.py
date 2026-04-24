@@ -5,11 +5,12 @@ import threading
 from typing import List, Union
 from jmqtt import QualityOfService as QoS, MQTTMessage, MQTTConnectionV3, MQTTConnectionV5
 
-from jhomeassistant.features import Availability, Origin, TopicConfig
+from jhomeassistant.features import Availability, TopicConfig
+from jhomeassistant.features.availability.availability_source import AvailabilitySource
 from jhomeassistant.helper import validate_discovery_prefix
 from jhomeassistant.helper.abbreviations import resolve_abbreviation
 from jhomeassistant.helper.scheduler import Scheduler
-from jhomeassistant.homeassistant_device import HomeAssistantDevice
+from jhomeassistant.homeassistant_origin import HomeAssistantOrigin
 from jhomeassistant.homeassistant_runtime import HomeAssistantRuntime
 from jhomeassistant.homeassistant_runtime_record import _RuntimeRecord
 from jhomeassistant.setup_logging import get_logger
@@ -51,11 +52,10 @@ class HomeAssistantConnection:
     def __init__(self, connection: Union[MQTTConnectionV3, MQTTConnectionV5], use_abbreviated_device_discovery=False):
         self._use_abbreviated_device_discovery = use_abbreviated_device_discovery
         self._connection = connection
-        self._devices: List[HomeAssistantDevice] = []
+        self._origins: List[HomeAssistantOrigin] = []
         self._discovery_prefix = 'homeassistant'
 
-        self.origin = Origin()
-        self.availability = Availability(self._connection.availability_topic)
+        self.availability = Availability(AvailabilitySource.CONNECTION, self._connection.availability_topic)
         self.ha_status = TopicConfig("homeassistant/status")
         self.qos: QoS | None = None
         self.encoding: str | None = None
@@ -77,35 +77,24 @@ class HomeAssistantConnection:
         self._discovery_prefix = validate_discovery_prefix(discovery_prefix)
         return self
 
-    def add_devices(self, *devices: HomeAssistantDevice) -> HomeAssistantConnection:
-        for device in devices:
-            self._devices.append(device)
+    def add_origin(self, *origins: HomeAssistantOrigin) -> HomeAssistantConnection:
+        for origin in origins:
+            self._origins.append(origin)
         return self
 
     def _discovery_gen(self):
-        for device in self._devices:
-            # Origin fallback
-            if self.origin.name is None:
-                logger.info(f"Using device name {device.name} as origin.name because no custom name was provided.")
-                self.origin.name = device.name
+        for origin in self._origins:
+            if origin.qos is None and self.qos is not None:
+                origin.qos = self.qos
+                logger.info(f"Inherit connection QoS={self.qos.name} to origin {origin.name}")
+            if origin.encoding is None and self.encoding is not None:
+                origin.encoding = self.encoding
+                logger.info(f"Inherit connection encoding={self.encoding} to origin {origin.name}")
 
-            # Inherit connection-level QoS/encoding if set
-            if device.qos is None and self.qos is not None:
-                device.qos = self.qos
-                logger.info(f"Inherit connection QoS={self.qos.name} to device {device.name}")
-            if device.encoding is None and self.encoding is not None:
-                device.encoding = self.encoding
-                logger.info(f"Inherit connection encoding={self.encoding} to device {device.name}")
+            origin.availability.internal_merge(self.availability)
 
-            device.availability.internal_merge(self.availability)
-            discovery_topic, discovery_payload = device.internal_discovery(self._discovery_prefix)
-
-            discovery_payload = {
-                **discovery_payload,
-                **self.origin.internal_to_dict()
-            }
-
-            yield discovery_topic, resolve_abbreviations(discovery_payload, self._use_abbreviated_device_discovery)
+            for discovery_topic, discovery_payload in origin._discovery_gen(self._discovery_prefix):
+                yield discovery_topic, resolve_abbreviations(discovery_payload, self._use_abbreviated_device_discovery)
 
     def discovery_text(self):
         text = ""
@@ -128,14 +117,14 @@ class HomeAssistantConnection:
             logger.debug(f"Discovery payload: {payload_str}")
             discovery_infos.append(self._connection.publish(discovery_topic, payload_str, QoS.AtLeastOnce, True))
 
-        # wait for all publish to finish
         for i in discovery_infos:
             i.wait_for_publish(publish_timeout)
 
     def _entities(self):
-        for device in self._devices:
-            for entity in device.entities:
-                yield entity
+        for origin in self._origins:
+            for device in origin._devices:
+                for entity in device.entities:
+                    yield entity
 
     def homeassistant_status(self, connection, client, userdata, message: MQTTMessage):
         for entity in self._entities():

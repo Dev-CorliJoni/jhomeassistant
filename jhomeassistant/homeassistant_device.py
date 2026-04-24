@@ -3,6 +3,7 @@ from typing import List
 
 from jmqtt import QualityOfService as QoS, client_identity
 from jhomeassistant.features import Availability
+from jhomeassistant.features.availability.availability_source import AvailabilitySource
 from jhomeassistant.helper import get_default_entity_id, validate_non_empty_string
 from jhomeassistant.entities import HomeAssistantEntityBase
 from jhomeassistant.helper.abbreviations import DeviceAbbreviation, Abbreviation
@@ -65,7 +66,7 @@ class HomeAssistantDevice:
         self.qos: QoS | None = None
         self.encoding: str | None = None
 
-        self.availability = Availability()
+        self.availability = Availability(source=AvailabilitySource.DEVICE)
         self._entities: List[HomeAssistantEntityBase] = []
 
     def _to_dict(self):

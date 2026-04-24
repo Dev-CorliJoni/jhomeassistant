@@ -4,6 +4,7 @@ from typing import Union, List
 
 from ..topic import TopicConfig
 from .availability_item import AvailabilityItem
+from .availability_source import AvailabilitySource
 from jhomeassistant.setup_logging import get_logger
 from jhomeassistant.types import AvailabilityMode
 from jhomeassistant.helper import validate_topic
@@ -14,7 +15,8 @@ logger = get_logger("Availability")
 
 
 class Availability:
-    def __init__(self, topic=None):
+    def __init__(self, source: AvailabilitySource, topic: str | None = None):
+        self._source = source
         self._mode = None
         self._items: List[AvailabilityItem] = []
         if topic is not None:
@@ -49,7 +51,7 @@ class Availability:
         if any(i.topic == topic for i in self._items):
             raise ValueError(f"Availability for topic {topic!r} already exists. Modify it via Availability[{topic!r}] or Availability[index].")
 
-        self._items.append(AvailabilityItem(topic, payload_available, payload_not_available, value_template))
+        self._items.append(AvailabilityItem(topic, payload_available, payload_not_available, value_template, self._source))
         logger.info(f"Added availability topic={topic!r}.")
         return self
 
@@ -65,17 +67,14 @@ class Availability:
     def active(self):
         return len(self._items) > 0
 
-    def internal_merge(self, availability: Availability):
-        """
-        Merge availability parameter into self.
-        """
-        for item in availability:
-            own_item = self[item.topic]
-            has_item = own_item is not None
-            if has_item:
-                logger.warning(f"Duplicate availability topic during merge. Preferring own availability item: {own_item!r}")
-            else:
+    def internal_merge(self, other: Availability):
+        """Merge availability from other into self. Idempotent: clears previously merged items before re-merging."""
+        self._items = [i for i in self._items if i._source == self._source]
+        for item in other:
+            if self[item.topic] is None:
                 self._items.append(item)
+            else:
+                logger.warning(f"Duplicate availability topic during merge. Preferring own availability item: {self[item.topic]!r}")
 
     def internal_to_dict(self):
         result = {}

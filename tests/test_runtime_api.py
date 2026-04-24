@@ -4,7 +4,7 @@ import threading
 import time
 
 import jhomeassistant.homeassistant_device as homeassistant_device_module
-from jhomeassistant import HomeAssistantConnection, HomeAssistantDevice
+from jhomeassistant import HomeAssistantConnection, HomeAssistantDevice, HomeAssistantOrigin
 from jhomeassistant.entities import HomeAssistantEntityBase
 from jhomeassistant.types import Component
 
@@ -27,10 +27,16 @@ class _FakeMqttConnection:
         self.subscribe_calls = []
         self.unsubscribe_calls = []
         self.raise_on_publish: Exception | None = None
+        self._on_connect_callbacks = []
+
+    def add_on_connect(self, cb):
+        self._on_connect_callbacks.append(cb)
 
     def connect(self):
         self.connect_calls += 1
         self.is_connected = True
+        for cb in self._on_connect_callbacks:
+            cb(self, None, None, 0)
         return self
 
     def publish(self, topic, payload, qos, retain):
@@ -56,7 +62,8 @@ def _build_connection(mqtt_connection: _FakeMqttConnection) -> tuple[HomeAssista
     entity.add_schedule(0.01, lambda _conn: schedule_event.set())
 
     device = HomeAssistantDevice("Runtime Device").add_entities(entity)
-    connection = HomeAssistantConnection(mqtt_connection).add_devices(device)
+    origin = HomeAssistantOrigin("Runtime App").add_devices(device)
+    connection = HomeAssistantConnection(mqtt_connection).add_origin(origin)
     return connection, schedule_event
 
 
