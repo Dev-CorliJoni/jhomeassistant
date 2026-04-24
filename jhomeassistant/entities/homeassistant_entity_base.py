@@ -31,6 +31,10 @@ class HomeAssistantEntityBase:
         """Called when MQTT connects (and on every reconnect). Stores the connection getter."""
         self._get_connection = get_connection
 
+    def cleanup(self, connection: MQTTConnection) -> None:
+        """Called when the entity is being removed. Subclasses override to release resources (e.g. unsubscribe)."""
+        pass
+
     @property
     def schedules(self):
         return self._schedules

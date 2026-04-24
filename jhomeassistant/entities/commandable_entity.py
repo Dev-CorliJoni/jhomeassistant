@@ -20,6 +20,10 @@ class CommandableEntity(HomeAssistantEntityBase):
         if self._command_topic is not None:
             self._get_connection().subscribe(self._command_topic, self._on_command)
 
+    def cleanup(self, connection: MQTTConnection) -> None:
+        if self._command_topic is not None:
+            connection.unsubscribe(self._command_topic)
+
     @property
     def internal_discovery_payload(self) -> dict:
         payload = super().internal_discovery_payload

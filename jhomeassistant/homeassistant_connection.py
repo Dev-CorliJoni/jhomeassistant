@@ -9,7 +9,9 @@ from jhomeassistant.features import Availability, TopicConfig
 from jhomeassistant.features.availability.availability_source import AvailabilitySource
 from jhomeassistant.helper import validate_discovery_prefix
 from jhomeassistant.helper.abbreviations import resolve_abbreviation
+from jhomeassistant.entities import HomeAssistantEntityBase
 from jhomeassistant.helper.scheduler import Scheduler
+from jhomeassistant.homeassistant_device import HomeAssistantDevice
 from jhomeassistant.homeassistant_origin import HomeAssistantOrigin
 from jhomeassistant.homeassistant_runtime import HomeAssistantRuntime
 from jhomeassistant.homeassistant_runtime_record import _RuntimeRecord
@@ -62,6 +64,7 @@ class HomeAssistantConnection:
 
         self._runtime_lock = threading.RLock()
         self._runtime: _RuntimeRecord | None = None
+        self._scheduler: Scheduler | None = None
 
     def get_connection(self) -> Union[MQTTConnectionV3, MQTTConnectionV5]:
         """Returns the active MQTT connection. Passed to entities and the scheduler.
@@ -148,6 +151,7 @@ class HomeAssistantConnection:
             runtime.done_event.set()
             if self._runtime is runtime:
                 self._runtime = None
+            self._scheduler = None
 
     def _runtime_execute(self, runtime: _RuntimeRecord, schedule_resolution: float, publish_timeout: float | None, re_raise_errors: bool) -> None:
         with self._runtime_lock:
@@ -171,7 +175,10 @@ class HomeAssistantConnection:
             self._connection.subscribe(self.ha_status.topic, self.homeassistant_status)
 
             tasks = [schedule for entity in self._entities() for schedule in entity.schedules]
-            Scheduler(*tasks).run_forever(
+            scheduler = Scheduler(*tasks)
+            with self._runtime_lock:
+                self._scheduler = scheduler
+            scheduler.run_forever(
                 schedule_resolution,
                 self.get_connection,
                 stop_event=runtime.stop_event,
@@ -275,6 +282,111 @@ class HomeAssistantConnection:
 
     def republish_discovery(self, publish_timeout: float | None = None) -> None:
         self._discovery(publish_timeout)
+
+    def _cleanup_entity_runtime(self, entity: HomeAssistantEntityBase) -> None:
+        """Release runtime resources held by the entity (subscriptions, scheduled tasks). Idempotent."""
+        try:
+            entity.cleanup(self._connection)
+        except Exception as exc:
+            logger.debug(f"Entity cleanup failed for {entity.name!r}: {exc}")
+
+        scheduler = self._scheduler
+        if scheduler is not None and entity.schedules:
+            try:
+                scheduler.remove_tasks(*entity.schedules)
+            except Exception as exc:
+                logger.debug(f"Failed to remove scheduler tasks for entity {entity.name!r}: {exc}")
+
+    def _publish_device_delete(self, device: HomeAssistantDevice, publish_timeout: float | None) -> None:
+        """Publish empty retained payload to delete the device from Home Assistant."""
+        topic = f"{self._discovery_prefix}/device/{device.unique_id}/config"
+        try:
+            logger.info(f"Publishing device-delete: topic={topic} retained=True qos={QoS.AtLeastOnce.name}")
+            info = self._connection.publish(topic, "", QoS.AtLeastOnce, True)
+            if publish_timeout is not None:
+                info.wait_for_publish(publish_timeout)
+        except Exception as exc:
+            logger.debug(f"Failed to publish device-delete payload for {device.name!r} ({topic}): {exc}")
+
+    def _republish_device_discovery(self, device: HomeAssistantDevice, publish_timeout: float | None) -> None:
+        """Republish discovery for a single device. Used after entity removal so HA drops the component."""
+        target_topic = f"{self._discovery_prefix}/device/{device.unique_id}/config"
+        for discovery_topic, discovery_payload in self._discovery_gen():
+            if discovery_topic != target_topic:
+                continue
+            try:
+                payload_str = json.dumps(discovery_payload, separators=(",", ":"))
+                logger.info(f"Republishing device discovery: topic={discovery_topic} retained=True qos={QoS.AtLeastOnce.name} bytes={len(payload_str)}")
+                info = self._connection.publish(discovery_topic, payload_str, QoS.AtLeastOnce, True)
+                if publish_timeout is not None:
+                    info.wait_for_publish(publish_timeout)
+            except Exception as exc:
+                logger.debug(f"Failed to republish device discovery for {device.name!r} ({target_topic}): {exc}")
+            return
+
+    def remove_entity(self, entity: HomeAssistantEntityBase, publish_timeout: float | None = None) -> None:
+        """Remove an entity from its device. Idempotent and thread-safe — safe to call while run() is active."""
+        with self._runtime_lock:
+            owner_device: HomeAssistantDevice | None = None
+            for origin in self._origins:
+                for device in origin._devices:
+                    if entity in device._entities:
+                        owner_device = device
+                        break
+                if owner_device is not None:
+                    break
+
+            if owner_device is None:
+                return
+
+            self._cleanup_entity_runtime(entity)
+            try:
+                owner_device._entities.remove(entity)
+            except ValueError:
+                pass
+
+        self._republish_device_discovery(owner_device, publish_timeout)
+
+    def remove_device(self, device: HomeAssistantDevice, publish_timeout: float | None = None) -> None:
+        """Remove a device from its origin and from Home Assistant. Idempotent and thread-safe."""
+        with self._runtime_lock:
+            owner_origin: HomeAssistantOrigin | None = None
+            for origin in self._origins:
+                if device in origin._devices:
+                    owner_origin = origin
+                    break
+
+            if owner_origin is None:
+                return
+
+            for entity in list(device.entities):
+                self._cleanup_entity_runtime(entity)
+
+            try:
+                owner_origin._devices.remove(device)
+            except ValueError:
+                pass
+
+        self._publish_device_delete(device, publish_timeout)
+
+    def remove_origin(self, origin: HomeAssistantOrigin, publish_timeout: float | None = None) -> None:
+        """Remove an origin and clear all its devices from Home Assistant. Idempotent and thread-safe."""
+        with self._runtime_lock:
+            if origin not in self._origins:
+                return
+
+            devices = list(origin._devices)
+            for device in devices:
+                for entity in list(device.entities):
+                    self._cleanup_entity_runtime(entity)
+
+            try:
+                self._origins.remove(origin)
+            except ValueError:
+                pass
+
+        for device in devices:
+            self._publish_device_delete(device, publish_timeout)
 
     def stop(self, timeout: float | None = None) -> None:
         runtime = self.runtime()
