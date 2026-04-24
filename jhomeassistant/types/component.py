@@ -13,6 +13,7 @@ class Component(Enum):
     HUMIDIFIER = "humidifier"
     MEDIA_PLAYER = "media_player"
     NUMBER = "number"
+    SELECT = "select"
     SENSOR = "sensor"
     SWITCH = "switch"
     UPDATE = "update"
