@@ -7,4 +7,4 @@ from .homeassistant_origin import HomeAssistantOrigin
 from .homeassistant_runtime import HomeAssistantRuntime
 
 __all__ = ["HomeAssistantDevice", "HomeAssistantConnection", "HomeAssistantOrigin", "HomeAssistantRuntime"]
-__version__ = "0.2.2"
+__version__ = "0.3.0"
