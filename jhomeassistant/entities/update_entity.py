@@ -21,12 +21,14 @@ class UpdateEntity(StatefulEntity, CommandableEntity):
                  state_topic: str,
                  command_topic: str | None = None,
                  on_install: Callable | None = None,
-                 device_class: UpdateDeviceClass = UpdateDeviceClass.NONE) -> None:
+                 device_class: UpdateDeviceClass = UpdateDeviceClass.NONE,
+                 payload_install: str = "INSTALL") -> None:
         super().__init__(Component.UPDATE, name,
                          state_topic=state_topic,
                          command_topic=command_topic,
                          on_command=on_install)
         self._device_class = device_class
+        self._payload_install = payload_install
 
     def publish(self, installed_version: str, latest_version: str) -> None:
         payload = json.dumps({
@@ -40,4 +42,6 @@ class UpdateEntity(StatefulEntity, CommandableEntity):
         payload = super().internal_discovery_payload
         if self._device_class is not UpdateDeviceClass.NONE:
             payload[Abbreviation.DEVICE_CLASS] = self._device_class.value
+        if self._command_topic is not None:
+            payload[Abbreviation.PAYLOAD_INSTALL] = self._payload_install
         return payload
