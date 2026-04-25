@@ -353,3 +353,219 @@ def test_remove_origin_during_runtime(monkeypatch):
 
     runtime.stop(timeout=1.0)
     assert runtime.join(timeout=1.0) is True
+
+
+# ---------------------------------------------------------------------------
+# add_entity / add_device / add_origin (dynamic add during runtime)
+# ---------------------------------------------------------------------------
+
+def _wait_for_subscribe(mqtt: _FakeMqttConnection, topic: str, timeout: float = 1.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(c[0] == topic for c in mqtt.subscribe_calls):
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_add_entity_before_runtime_is_noop_then_activates_on_run(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+    connection, origin, device, _button = _build_full_tree(mqtt)
+
+    new_button = ButtonEntity("Late Button", "test/late_cmd", on_press=lambda *_: None)
+    # add before run() — no subscribes yet
+    connection.add_entity(new_button, device)
+    assert new_button in device._entities
+    assert not any(c[0] == "test/late_cmd" for c in mqtt.subscribe_calls)
+
+    runtime = connection.run(blocking=False, schedule_resolution=0.01, publish_timeout=1.0)
+    assert runtime is not None
+    assert _wait_for_subscribe(mqtt, "test/late_cmd")
+
+    runtime.stop(timeout=1.0)
+    assert runtime.join(timeout=1.0) is True
+
+
+def test_add_entity_during_runtime_subscribes_and_republishes(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+    connection, origin, device, _button = _build_full_tree(mqtt)
+
+    runtime = connection.run(blocking=False, schedule_resolution=0.01, publish_timeout=1.0)
+    assert runtime is not None
+    assert _wait_for_subscribe(mqtt, "test/cmd")
+
+    publishes_before = len(mqtt.publish_calls)
+    new_button = ButtonEntity("Late Button", "test/late_cmd", on_press=lambda *_: None)
+    connection.add_entity(new_button, device)
+
+    assert _wait_for_subscribe(mqtt, "test/late_cmd")
+    # discovery must have been republished for the device
+    device_topic = _device_topic(device)
+    new_publishes = [c for c in mqtt.publish_calls[publishes_before:] if c[0] == device_topic and c[1] != ""]
+    assert len(new_publishes) >= 1
+
+    runtime.stop(timeout=1.0)
+    assert runtime.join(timeout=1.0) is True
+
+
+def test_add_entity_during_runtime_registers_schedule(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+    connection, origin, device, _button = _build_full_tree(mqtt)
+
+    runtime = connection.run(blocking=False, schedule_resolution=0.01, publish_timeout=1.0)
+    assert runtime is not None
+    assert _wait_for_subscribe(mqtt, "test/cmd")
+
+    tick_event = threading.Event()
+    sensor = HomeAssistantEntityBase(Component.SENSOR, "Late Sensor")
+    sensor.add_schedule(0.01, lambda _conn: tick_event.set())
+    connection.add_entity(sensor, device)
+
+    assert tick_event.wait(timeout=1.0), "schedule of dynamically added entity never fired"
+
+    runtime.stop(timeout=1.0)
+    assert runtime.join(timeout=1.0) is True
+
+
+def test_add_entity_is_idempotent(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+    connection, origin, device, button = _build_full_tree(mqtt)
+
+    runtime = connection.run(blocking=False, schedule_resolution=0.01, publish_timeout=1.0)
+    assert runtime is not None
+    assert _wait_for_subscribe(mqtt, "test/cmd")
+
+    publishes_before = len(mqtt.publish_calls)
+    connection.add_entity(button, device)  # already present
+    time.sleep(0.05)
+    # no extra subscribe, only one extra republish (idempotent: entity not re-added)
+    late_subs = [c for c in mqtt.subscribe_calls if c[0] == "test/cmd"]
+    assert len(late_subs) == 1  # subscribed once during run(), not again
+
+    runtime.stop(timeout=1.0)
+    assert runtime.join(timeout=1.0) is True
+
+
+def test_add_entity_unknown_device_is_noop(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+    connection, _origin, _device, _button = _build_full_tree(mqtt)
+
+    orphan_device = HomeAssistantDevice("Orphan", identifier="orphan-id")
+    new_entity = HomeAssistantEntityBase(Component.SENSOR, "Orphan Sensor")
+    connection.add_entity(new_entity, orphan_device)  # device not registered
+
+    assert new_entity not in orphan_device._entities
+    assert mqtt.publish_calls == []
+
+
+def test_add_device_during_runtime_subscribes_and_publishes_discovery(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+    connection, origin, _device, _button = _build_full_tree(mqtt)
+
+    runtime = connection.run(blocking=False, schedule_resolution=0.01, publish_timeout=1.0)
+    assert runtime is not None
+    assert _wait_for_subscribe(mqtt, "test/cmd")
+
+    new_button = ButtonEntity("New Button", "test/new_cmd", on_press=lambda *_: None)
+    new_device = HomeAssistantDevice("New Device", identifier="new-device-id").add_entities(new_button)
+
+    publishes_before = len(mqtt.publish_calls)
+    connection.add_device(new_device, origin)
+
+    assert _wait_for_subscribe(mqtt, "test/new_cmd")
+    new_device_topic = _device_topic(new_device)
+    new_publishes = [c for c in mqtt.publish_calls[publishes_before:] if c[0] == new_device_topic and c[1] != ""]
+    assert len(new_publishes) >= 1
+
+    runtime.stop(timeout=1.0)
+    assert runtime.join(timeout=1.0) is True
+
+
+def test_add_device_is_idempotent(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+    connection, origin, device, _button = _build_full_tree(mqtt)
+
+    connection.add_device(device, origin)  # already present — must not duplicate
+
+    assert origin._devices.count(device) == 1
+    assert mqtt.publish_calls == []
+
+
+def test_add_device_unknown_origin_is_noop(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+    connection, _origin, _device, _button = _build_full_tree(mqtt)
+
+    orphan_origin = HomeAssistantOrigin("Orphan")
+    new_device = HomeAssistantDevice("New", identifier="new-id")
+    connection.add_device(new_device, orphan_origin)
+
+    assert new_device not in orphan_origin._devices
+    assert mqtt.publish_calls == []
+
+
+def test_add_origin_during_runtime_subscribes_and_publishes_discovery(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+
+    # Start with an empty connection (no origins)
+    connection = HomeAssistantConnection(mqtt)
+    runtime = connection.run(blocking=False, schedule_resolution=0.01, publish_timeout=1.0)
+    assert runtime is not None
+    time.sleep(0.05)
+
+    new_button = ButtonEntity("Late Button", "test/late_cmd", on_press=lambda *_: None)
+    new_device = HomeAssistantDevice("Late Device", identifier="late-device-id").add_entities(new_button)
+    new_origin = HomeAssistantOrigin("Late Origin").add_devices(new_device)
+
+    publishes_before = len(mqtt.publish_calls)
+    connection.add_origin(new_origin)
+
+    assert _wait_for_subscribe(mqtt, "test/late_cmd")
+    device_topic = _device_topic(new_device)
+    new_publishes = [c for c in mqtt.publish_calls[publishes_before:] if c[0] == device_topic and c[1] != ""]
+    assert len(new_publishes) >= 1
+    assert new_origin in connection._origins
+
+    runtime.stop(timeout=1.0)
+    assert runtime.join(timeout=1.0) is True
+
+
+def test_add_origin_is_idempotent(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+    connection, origin, _device, _button = _build_full_tree(mqtt)
+
+    connection.add_origin(origin)  # already present
+
+    assert connection._origins.count(origin) == 1
+    assert mqtt.publish_calls == []
+
+
+def test_add_origin_during_runtime_registers_schedule(monkeypatch):
+    _patch_device_facts(monkeypatch)
+    mqtt = _FakeMqttConnection()
+    connection = HomeAssistantConnection(mqtt)
+
+    runtime = connection.run(blocking=False, schedule_resolution=0.01, publish_timeout=1.0)
+    assert runtime is not None
+    time.sleep(0.05)
+
+    tick_event = threading.Event()
+    sensor = HomeAssistantEntityBase(Component.SENSOR, "Late Sensor")
+    sensor.add_schedule(0.01, lambda _conn: tick_event.set())
+    late_device = HomeAssistantDevice("Late Device", identifier="late-sched-id").add_entities(sensor)
+    late_origin = HomeAssistantOrigin("Late Origin").add_devices(late_device)
+    connection.add_origin(late_origin)
+
+    assert tick_event.wait(timeout=1.0), "schedule of dynamically added origin's entity never fired"
+
+    runtime.stop(timeout=1.0)
+    assert runtime.join(timeout=1.0) is True

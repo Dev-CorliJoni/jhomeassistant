@@ -80,9 +80,26 @@ class HomeAssistantConnection:
         self._discovery_prefix = validate_discovery_prefix(discovery_prefix)
         return self
 
-    def add_origin(self, *origins: HomeAssistantOrigin) -> HomeAssistantConnection:
-        for origin in origins:
-            self._origins.append(origin)
+    def add_origin(self, *origins: HomeAssistantOrigin, publish_timeout: float | None = None) -> HomeAssistantConnection:
+        new_origins = []
+        is_active = False
+        with self._runtime_lock:
+            for origin in origins:
+                if origin not in self._origins:
+                    self._origins.append(origin)
+                    new_origins.append(origin)
+            if new_origins:
+                is_active = self._runtime is not None and self._runtime_is_active_unlocked(self._runtime)
+                if is_active:
+                    for origin in new_origins:
+                        for device in origin._devices:
+                            for entity in device.entities:
+                                self._activate_entity_runtime(entity)
+
+        if is_active:
+            for origin in new_origins:
+                self._publish_origin_discovery(origin, publish_timeout)
+
         return self
 
     def _discovery_gen(self):
@@ -283,6 +300,39 @@ class HomeAssistantConnection:
     def republish_discovery(self, publish_timeout: float | None = None) -> None:
         self._discovery(publish_timeout)
 
+    def _activate_entity_runtime(self, entity: HomeAssistantEntityBase) -> None:
+        """Call mqtt_connected and register schedules with the running scheduler. Assumes _runtime_lock is held."""
+        try:
+            entity.mqtt_connected(self.get_connection)
+        except Exception as exc:
+            logger.debug(f"mqtt_connected failed for entity {entity.name!r}: {exc}")
+        scheduler = self._scheduler
+        if scheduler is not None and entity.schedules:
+            try:
+                scheduler.add_tasks(*entity.schedules)
+            except Exception as exc:
+                logger.debug(f"Failed to add scheduler tasks for entity {entity.name!r}: {exc}")
+
+    def _publish_origin_discovery(self, origin: HomeAssistantOrigin, publish_timeout: float | None) -> None:
+        """Publish discovery for a single origin with connection-level QoS/encoding/availability applied."""
+        if origin.qos is None and self.qos is not None:
+            origin.qos = self.qos
+            logger.info(f"Inherit connection QoS={self.qos.name} to origin {origin.name}")
+        if origin.encoding is None and self.encoding is not None:
+            origin.encoding = self.encoding
+            logger.info(f"Inherit connection encoding={self.encoding} to origin {origin.name}")
+        origin.availability.internal_merge(self.availability)
+
+        infos = []
+        for discovery_topic, discovery_payload in origin._discovery_gen(self._discovery_prefix):
+            payload = resolve_abbreviations(discovery_payload, self._use_abbreviated_device_discovery)
+            payload_str = json.dumps(payload, separators=(",", ":"))
+            logger.info(f"Publishing discovery: topic={discovery_topic} retained=True qos={QoS.AtLeastOnce.name} bytes={len(payload_str)}")
+            logger.debug(f"Discovery payload: {payload_str}")
+            infos.append(self._connection.publish(discovery_topic, payload_str, QoS.AtLeastOnce, True))
+        for info in infos:
+            info.wait_for_publish(publish_timeout)
+
     def _cleanup_entity_runtime(self, entity: HomeAssistantEntityBase) -> None:
         """Release runtime resources held by the entity (subscriptions, scheduled tasks). Idempotent."""
         try:
@@ -323,6 +373,53 @@ class HomeAssistantConnection:
             except Exception as exc:
                 logger.debug(f"Failed to republish device discovery for {device.name!r} ({target_topic}): {exc}")
             return
+
+    def add_entity(self, entity: HomeAssistantEntityBase, device: HomeAssistantDevice,
+                   publish_timeout: float | None = None) -> None:
+        """Add an entity to an existing device. Idempotent and thread-safe.
+        If run() is active: calls mqtt_connected, registers schedules, republishes device discovery."""
+        owner_device = None
+        is_active = False
+
+        with self._runtime_lock:
+            for origin in self._origins:
+                if device in origin._devices:
+                    owner_device = device
+                    break
+
+            if owner_device is None:
+                return
+
+            if entity in device._entities:
+                return
+
+            device._entities.append(entity)
+            is_active = self._runtime is not None and self._runtime_is_active_unlocked(self._runtime)
+            if is_active:
+                self._activate_entity_runtime(entity)
+
+        self._republish_device_discovery(owner_device, publish_timeout)
+
+    def add_device(self, device: HomeAssistantDevice, origin: HomeAssistantOrigin,
+                   publish_timeout: float | None = None) -> None:
+        """Add a device to an existing origin. Idempotent and thread-safe.
+        If run() is active: activates all its entities (mqtt_connected + schedules), then publishes discovery."""
+        is_active = False
+
+        with self._runtime_lock:
+            if origin not in self._origins:
+                return
+
+            if device in origin._devices:
+                return
+
+            origin._devices.append(device)
+            is_active = self._runtime is not None and self._runtime_is_active_unlocked(self._runtime)
+            if is_active:
+                for entity in device.entities:
+                    self._activate_entity_runtime(entity)
+
+        self._republish_device_discovery(device, publish_timeout)
 
     def remove_entity(self, entity: HomeAssistantEntityBase, publish_timeout: float | None = None) -> None:
         """Remove an entity from its device. Idempotent and thread-safe — safe to call while run() is active."""

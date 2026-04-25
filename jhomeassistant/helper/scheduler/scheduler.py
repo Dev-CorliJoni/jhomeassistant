@@ -12,6 +12,12 @@ class Scheduler:
         self.tasks = list(tasks)
         self._tasks_lock = threading.Lock()
 
+    def add_tasks(self, *tasks: Schedule) -> None:
+        if not tasks:
+            return
+        with self._tasks_lock:
+            self.tasks.extend(tasks)
+
     def remove_tasks(self, *tasks: Schedule) -> None:
         if not tasks:
             return
