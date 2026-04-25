@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Callable
 
+from jmqtt import QualityOfService as QoS
+
 from jhomeassistant.entities.commandable_entity import CommandableEntity
 from jhomeassistant.entities.stateful_entity import StatefulEntity
 from jhomeassistant.helper.abbreviations import Abbreviation
@@ -30,12 +32,19 @@ class UpdateEntity(StatefulEntity, CommandableEntity):
         self._device_class = device_class
         self._payload_install = payload_install
 
-    def publish(self, installed_version: str, latest_version: str) -> None:
+    def publish(
+        self,
+        installed_version: str,
+        latest_version: str,
+        qos: QoS = QoS.AtMostOnce,
+        retain: bool = False,
+        wait_for_publish: bool = False,
+    ) -> None:
         payload = json.dumps({
             "installed_version": installed_version,
             "latest_version": latest_version,
         }, separators=(",", ":"))
-        self._publish_state(payload)
+        self._publish_state(payload, qos, retain, wait_for_publish)
 
     @property
     def internal_discovery_payload(self) -> dict:

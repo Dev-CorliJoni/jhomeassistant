@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, List
 
+from jmqtt import QualityOfService as QoS
+
 from jhomeassistant.entities.stateful_entity import StatefulEntity
 from jhomeassistant.helper.abbreviations import Abbreviation
 from jhomeassistant.types.component import Component
@@ -21,9 +23,17 @@ class EventEntity(StatefulEntity):
         self._event_types = event_types
         self._device_class = device_class
 
-    def publish(self, event_type: str, **attributes: Any) -> None:
+    def publish(
+        self,
+        event_type: str,
+        *,
+        qos: QoS = QoS.AtMostOnce,
+        retain: bool = False,
+        wait_for_publish: bool = False,
+        **attributes: Any,
+    ) -> None:
         payload = json.dumps({"event_type": event_type, **attributes}, separators=(",", ":"))
-        self._publish_state(payload)
+        self._publish_state(payload, qos, retain, wait_for_publish)
 
     @property
     def internal_discovery_payload(self) -> dict:

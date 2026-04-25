@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Union
 
+from jmqtt import QualityOfService as QoS
+
 from jhomeassistant.entities.stateful_entity import StatefulEntity
 from jhomeassistant.helper.abbreviations import Abbreviation
 from jhomeassistant.types.component import Component
@@ -25,8 +27,14 @@ class SensorEntity(StatefulEntity):
         self._value_template = value_template
         self._entity_category = entity_category
 
-    def publish(self, value: Union[str, int, float]) -> None:
-        self._publish_state(str(value))
+    def publish(
+        self,
+        value: Union[str, int, float],
+        qos: QoS = QoS.AtMostOnce,
+        retain: bool = False,
+        wait_for_publish: bool = False,
+    ) -> None:
+        self._publish_state(str(value), qos, retain, wait_for_publish)
 
     @property
     def internal_discovery_payload(self) -> dict:

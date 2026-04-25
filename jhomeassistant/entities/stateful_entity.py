@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Any
 
+from jmqtt import QualityOfService as QoS
+
 from jhomeassistant.entities.homeassistant_entity_base import HomeAssistantEntityBase
 from jhomeassistant.helper import validate_topic
 from jhomeassistant.helper.abbreviations import Abbreviation
@@ -20,6 +22,12 @@ class StatefulEntity(HomeAssistantEntityBase):
             **super().internal_discovery_payload,
             Abbreviation.STATE_TOPIC: self._state_topic,
         }
-        
-    def _publish_state(self, payload: str) -> None:
-        self._get_connection().publish(self._state_topic, payload)
+
+    def _publish_state(
+        self,
+        payload: str,
+        qos: QoS = QoS.AtMostOnce,
+        retain: bool = False,
+        wait_for_publish: bool = False,
+    ) -> None:
+        self._get_connection().publish(self._state_topic, payload, qos, retain, wait_for_publish=wait_for_publish)

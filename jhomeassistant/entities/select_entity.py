@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Callable, List
 
+from jmqtt import QualityOfService as QoS
+
 from jhomeassistant.entities.commandable_entity import CommandableEntity
 from jhomeassistant.entities.stateful_entity import StatefulEntity
 from jhomeassistant.helper.abbreviations import Abbreviation
@@ -39,10 +41,16 @@ class SelectEntity(StatefulEntity, CommandableEntity):
         self._value_template = value_template
         self._command_template = command_template
 
-    def publish(self, option: str) -> None:
+    def publish(
+        self,
+        option: str,
+        qos: QoS = QoS.AtMostOnce,
+        retain: bool = False,
+        wait_for_publish: bool = False,
+    ) -> None:
         if option not in self._options:
             raise ValueError(f"Option '{option}' not in options: {self._options}")
-        self._publish_state(option)
+        self._publish_state(option, qos, retain, wait_for_publish)
 
     @property
     def internal_discovery_payload(self) -> dict:
